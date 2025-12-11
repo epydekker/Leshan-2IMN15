@@ -33,6 +33,10 @@ public class RoomControl {
     // Static reference to the server.
     //
     private static LeshanServer lwServer;
+    private static Map<String, Integer> peakPowerMap = new HashMap<>();
+    private static int maximumPeakRoomPower = 0;
+    private static String roomName = "Living Room";  // arbitrary
+
 
     //
     // 2IMN15:  TODO  : fill in
@@ -72,7 +76,7 @@ public class RoomControl {
             // 			Presence detector <- Room control (GET presence observe)
             // 			Presence detector -> Room control (2.05 Content observe)
 
-            // The first one already happens; so we have to do the GET presence observe;
+            // The first two already happens; so we have to do the GET presence observe;
             // So we subscribe to presence changes by observing the Presence resource
             ObserveRequest requestPresence = new ObserveRequest(Constants.PRESENCE_DETECTOR_ID, 0, Constants.RES_PRESENCE);
 
@@ -93,11 +97,33 @@ public class RoomControl {
 
         if (supportedObject.get(Constants.LUMINAIRE_ID) != null) {
             System.out.println("Luminaire");
+            // 2IMN15:  Process the registration of a new Luminaire.
+            // 2IMN15:  The sequence diagram shows
+            // 			Luminaire -> Room control (Register ep=IoT-Pi42 Presence)
+            // 			Luminaire <- Room control (Created)
+            // 			Luminaire <- Room control (GET peak power Read)
+            // 			Luminaire -> Room control (2.05 Peak Power)
+            // 			Room control -> Room control (Add peak power to maximum room peak power)
+            // 			Room control -> Room control (Add <ep, [Peak Power]> to peak power map)
+            // The first two already happens; so we have to do the GET peak power Read;
+            // So we can make a read peak power request that we can send similarly to the observe in the previous part
+            ReadRequest readPeakPower = new ReadRequest(Constants.LUMINAIRE_ID, 0, Constants.RES_PEAK_POWER);
 
-            //
-            // 2IMN15:  TODO  :  fill in
-            //
-            // Process the registration of a new Luminaire.
+            try {
+                ReadResponse resp = lwServer.send(registration, readPeakPower, 5000);
+                if (resp == null || !resp.isSuccess()) {
+                    System.out.println("Failed to read peak power for " + registration.getEndpoint());
+                } else {
+                    System.out.println("Read peak power for " + registration.getEndpoint());
+                    int peakPower = Integer.parseInt(resp.getContent().toString());
+                    peakPowerMap.put(registration.getEndpoint(), peakPower);
+                    maximumPeakRoomPower += peakPower;
+                }
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+
+
         }
 
         if (supportedObject.get(Constants.DEMAND_RESPONSE_ID) != null) {
@@ -125,24 +151,34 @@ public class RoomControl {
                                              Registration registration,
                                              ObserveResponse response) {
         if (registration != null && observation != null && response != null) {
-            //
-            // 2IMN15:  TODO  :  fill in
-            //
-            // When the registration and observation are known,
-            // process the value contained in the response.
-            //
-            // Useful methods:
-            //    registration.getEndpoint()
-            //    observation.getPath()
             LwM2mPath observationPath = observation.getPath();
 
             // 2IMN15: Check if this observe comes from the PresenceDetector object
-            if (observationPath.getObjectId()   == Constants.PRESENCE_DETECTOR_ID &&
-                observationPath.getResourceId() == Constants.RES_PRESENCE) {
+            if (observationPath.getObjectId() == Constants.PRESENCE_DETECTOR_ID &&
+                    observationPath.getResourceId() == Constants.RES_PRESENCE) {
                 // 2IMN15: Grab the presence value from the request
                 boolean presence = (boolean) ((LwM2mResource) response.getContent()).getValue();
                 // 2IMN15: Inform about the new presence value
                 System.out.println("Presence update: " + presence);
+
+                // We have to update every luminere in the peakpower map to the new presence value
+                for (String endpoint : peakPowerMap.keySet()) {
+                    Registration lumReg = lwServer.getRegistrationService().getByEndpoint(endpoint);
+                    if (lumReg != null) {
+                        // We need to send a request to set the RES_POWER to the same state as the presence (true/false)
+                        WriteRequest setPowerReq = new WriteRequest(Constants.LUMINAIRE_ID, 0, Constants.RES_POWER, presence);
+                        try {
+                            WriteResponse wr = lwServer.send(lumReg, setPowerReq, 5000);
+                            if (wr == null || !wr.isSuccess()) {
+                                System.out.println("Failed to write power for " + endpoint);
+                            }
+                        } catch (InterruptedException e) {
+                            throw new RuntimeException(e);
+                        }
+
+                    }
+                }
+
             }
 
 
