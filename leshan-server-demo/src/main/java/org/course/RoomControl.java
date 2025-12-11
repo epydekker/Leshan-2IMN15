@@ -12,6 +12,7 @@ import java.util.Map.Entry;
 import java.util.Set;
 import java.io.PrintWriter;
 
+import org.eclipse.leshan.core.node.LwM2mSingleResource;
 import org.eclipse.leshan.core.response.ResponseCallback;
 import org.eclipse.leshan.server.californium.LeshanServer;
 import org.eclipse.leshan.server.registration.Registration;
@@ -115,7 +116,7 @@ public class RoomControl {
                     System.out.println("Failed to read peak power for " + registration.getEndpoint());
                 } else {
                     System.out.println("Read peak power for " + registration.getEndpoint());
-                    int peakPower = Integer.parseInt(resp.getContent().toString());
+                    int peakPower = readInteger(registration, Constants.LUMINAIRE_ID,0, Constants.RES_PEAK_POWER);
                     peakPowerMap.put(registration.getEndpoint(), peakPower);
                     maximumPeakRoomPower += peakPower;
                 }
@@ -185,6 +186,31 @@ public class RoomControl {
             // For processing an update of the Demand Response object.
             // It contains some example code.
             int newPowerBudget = observedDemandResponse(observation, response);
+            if (newPowerBudget != -1) {
+                // 2IMN15: Once again let's look at the sequence diagram
+                // 			Demand Response -> Room control (Manually set total allowed peak room power)
+                // 			Room control <- Room control (New dim level = 100 * total allowed / maximum room peak )
+                // ALT: 	Room control <- Room control (New dim level = 100 if New dim level > 100 )
+                //       	Room control -> ep for ep in powerMap (POST Dim Level New dim level)
+                //       	Room control <- ep for ep in powerMap (204 changed)
+                int dimLevel = Math.min(100, 100 * newPowerBudget / maximumPeakRoomPower); // handles both the calculation and alt at the same time
+                for (String endpoint : peakPowerMap.keySet()) {
+                    Registration lumReg = lwServer.getRegistrationService().getByEndpoint(endpoint);
+                    if (lumReg != null) {
+                        // We need to send a request to set the RES_DIM_LEVEL to the same state as the new dim value
+                        WriteRequest setDim = new WriteRequest(Constants.LUMINAIRE_ID, 0, Constants.RES_DIM_LEVEL, dimLevel);
+                        try {
+                            WriteResponse wr = lwServer.send(lumReg, setDim, 5000);
+                            if (wr == null || !wr.isSuccess()) {
+                                System.out.println("Failed to write dim level for " + endpoint);
+                            }
+                        } catch (InterruptedException e) {
+                            throw new RuntimeException(e);
+                        }
+
+                    }
+                }
+            }
 
         }
     }

@@ -136,6 +136,8 @@ public class Luminaire extends BaseInstanceEnabler {
         vPeakPower = peakpower;
 
         // 2IMN15: When the peak power has been updated we should update the label in the UI
+
+        System.out.println(">> vPeakPower VALUE <<" + vPeakPower);
         peakPowerLabel.setText("Peak Power: " + String.format("%02d", vPeakPower) + " watts");
     }
 
@@ -143,6 +145,8 @@ public class Luminaire extends BaseInstanceEnabler {
         if (vPower != value) {
             vPower = value;
             // 2IMN15:  When the vPower has been updated, we should update the label from the GUI
+            System.out.println(">> POWER VALUE <<" + value);
+
             powerLabel.setText("Power: " + value);
             fireResourceChange(RES_POWER);
         }
@@ -167,6 +171,7 @@ public class Luminaire extends BaseInstanceEnabler {
     private synchronized void setDimLevel(long value) {
         if (vDimLevel != value) {
             vDimLevel = value;
+            System.out.println(">> DIM VALUE <<" + value);
             // 2IMN15:  When the dim value has been updated we should update the label in the UI
             dimLabel.setText("Dim: " + value);
             fireResourceChange(RES_DIM_LEVEL);
