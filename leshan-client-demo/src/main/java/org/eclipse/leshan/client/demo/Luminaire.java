@@ -24,8 +24,9 @@ import org.eclipse.leshan.core.response.ReadResponse;
 import org.eclipse.leshan.core.response.WriteResponse;
 import org.eclipse.leshan.core.util.NamedThreadFactory;
 
-
 import javax.swing.*;
+import javax.swing.border.EmptyBorder;
+import java.awt.*;
 import java.awt.event.ActionListener;
 import java.awt.event.ActionEvent;
 import java.awt.Container;
@@ -40,7 +41,8 @@ public class Luminaire extends BaseInstanceEnabler {
     private static final int RES_TYPE = 30002;
     private static final int RES_PEAK_POWER = 30003;
     private static final int RES_DIM_LEVEL = 30004;
-    private static final List<Integer> supportedResources = Arrays.asList(RES_POWER, RES_TYPE, RES_PEAK_POWER, RES_DIM_LEVEL);
+    private static final List<Integer> supportedResources = Arrays.asList(RES_POWER, RES_TYPE, RES_PEAK_POWER,
+            RES_DIM_LEVEL);
     // Variables storing current values.
 
     private boolean vPower = false;
@@ -58,28 +60,142 @@ public class Luminaire extends BaseInstanceEnabler {
     private JLabel dimLabel;
     private JLabel powerLabel;
     private JLabel peakPowerLabel;
+    private JLabel typeLabel;
+    private LightbulbPanel lightbulbPanel;
+
+    // Inner class for the lightbulb visual
+    class LightbulbPanel extends JPanel {
+        private boolean isOn = false;
+        private int dimLevel = 0;
+
+        public LightbulbPanel() {
+            setPreferredSize(new Dimension(120, 160));
+            setBackground(new Color(45, 45, 55));
+        }
+
+        public void setOn(boolean on) {
+            this.isOn = on;
+            repaint();
+        }
+
+        public void setDimLevel(int level) {
+            this.dimLevel = level;
+            repaint();
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            Graphics2D g2d = (Graphics2D) g;
+            g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+            int centerX = getWidth() / 2;
+            int bulbY = 30;
+            int bulbRadius = 40;
+
+            // Draw glow effect when ON
+            if (isOn && dimLevel > 0) {
+                float intensity = dimLevel / 100f;
+                for (int i = 5; i >= 1; i--) {
+                    int alpha = (int) (40 * intensity * (6 - i) / 5);
+                    g2d.setColor(new Color(255, 220, 50, alpha));
+                    int glowSize = bulbRadius + i * 10;
+                    g2d.fillOval(centerX - glowSize, bulbY - glowSize + bulbRadius, glowSize * 2, glowSize * 2);
+                }
+            }
+
+            // Draw bulb glass
+            if (isOn && dimLevel > 0) {
+                float intensity = dimLevel / 100f;
+                int r = (int) (255 * intensity);
+                int gVal = (int) (220 * intensity);
+                int b = (int) (50 * intensity);
+                g2d.setColor(new Color(r, gVal, b));
+            } else {
+                g2d.setColor(new Color(100, 100, 110));
+            }
+            g2d.fillOval(centerX - bulbRadius, bulbY, bulbRadius * 2, bulbRadius * 2);
+
+            // Draw bulb outline
+            g2d.setColor(new Color(70, 70, 80));
+            g2d.setStroke(new BasicStroke(2));
+            g2d.drawOval(centerX - bulbRadius, bulbY, bulbRadius * 2, bulbRadius * 2);
+
+            // Draw screw base
+            int baseTop = bulbY + bulbRadius * 2 - 10;
+            int baseWidth = 30;
+            g2d.setColor(new Color(80, 80, 90));
+            g2d.fillRect(centerX - baseWidth / 2, baseTop, baseWidth, 40);
+
+            // Draw screw threads
+            g2d.setColor(new Color(60, 60, 70));
+            for (int i = 0; i < 4; i++) {
+                g2d.drawLine(centerX - baseWidth / 2, baseTop + 10 + i * 8,
+                        centerX + baseWidth / 2, baseTop + 10 + i * 8);
+            }
+
+            // Draw status text
+            g2d.setFont(new Font("SansSerif", Font.BOLD, 14));
+            String status = isOn ? "ON" : "OFF";
+            FontMetrics fm = g2d.getFontMetrics();
+            int textX = centerX - fm.stringWidth(status) / 2;
+            g2d.setColor(isOn ? new Color(100, 255, 100) : new Color(255, 100, 100));
+            g2d.drawString(status, textX, baseTop + 55);
+        }
+    }
 
     public Luminaire() {
-        // 2IMN15:  Create simple GUI with text labels to display current luminaire state
         guiFrame = new JFrame();
         guiFrame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
         guiFrame.setTitle("Luminaire");
-        guiFrame.setLayout(new GridLayout(0, 1, 5, 5));
+        guiFrame.setMinimumSize(new Dimension(280, 320));
+        guiFrame.getContentPane().setBackground(new Color(45, 45, 55));
 
-        dimLabel = new JLabel();
-        dimLabel.setText("Dim: " + vDimLevel);
+        // Main panel with padding
+        JPanel mainPanel = new JPanel(new BorderLayout(10, 10));
+        mainPanel.setBackground(new Color(45, 45, 55));
+        mainPanel.setBorder(new EmptyBorder(15, 15, 15, 15));
 
-        powerLabel = new JLabel();
-        powerLabel.setText("Power: " + vPower);
+        // Lightbulb panel (center)
+        lightbulbPanel = new LightbulbPanel();
+        mainPanel.add(lightbulbPanel, BorderLayout.CENTER);
 
-        peakPowerLabel = new JLabel();
-        peakPowerLabel.setText("Peak Power: " + String.format("%02d", vPeakPower) + " watts");
+        // Info panel (bottom)
+        JPanel infoPanel = new JPanel(new GridLayout(4, 1, 5, 5));
+        infoPanel.setBackground(new Color(55, 55, 65));
+        infoPanel.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(70, 70, 80), 1),
+                new EmptyBorder(10, 10, 10, 10)));
 
-        guiFrame.add(dimLabel);
-        guiFrame.add(powerLabel);
-        guiFrame.add(peakPowerLabel);
+        Font labelFont = new Font("SansSerif", Font.PLAIN, 14);
+        Color labelColor = new Color(220, 220, 230);
+
+        typeLabel = new JLabel("Type: " + vType);
+        typeLabel.setFont(labelFont);
+        typeLabel.setForeground(labelColor);
+
+        powerLabel = new JLabel("Power: " + (vPower ? "ON" : "OFF"));
+        powerLabel.setFont(labelFont);
+        powerLabel.setForeground(vPower ? new Color(100, 255, 100) : new Color(255, 100, 100));
+
+        dimLabel = new JLabel("Dim Level: " + vDimLevel + "%");
+        dimLabel.setFont(labelFont);
+        dimLabel.setForeground(labelColor);
+
+        peakPowerLabel = new JLabel("Peak Power: " + vPeakPower + "W");
+        peakPowerLabel.setFont(labelFont);
+        peakPowerLabel.setForeground(labelColor);
+
+        infoPanel.add(typeLabel);
+        infoPanel.add(powerLabel);
+        infoPanel.add(dimLabel);
+        infoPanel.add(peakPowerLabel);
+
+        mainPanel.add(infoPanel, BorderLayout.SOUTH);
+        guiFrame.add(mainPanel);
         guiFrame.pack();
-        java.awt.EventQueue.invokeLater(()->guiFrame.setVisible(true));
+        guiFrame.setLocationRelativeTo(null);
+        java.awt.EventQueue.invokeLater(() -> guiFrame.setVisible(true));
 
     }
 
@@ -135,19 +251,32 @@ public class Luminaire extends BaseInstanceEnabler {
         vType = lumtype;
         vPeakPower = peakpower;
 
-        // 2IMN15: When the peak power has been updated we should update the label in the UI
+        // 2IMN15: Update window title with luminaire type
+        guiFrame.setTitle(vType + " Luminaire");
 
+        // Update labels
         System.out.println(">> vPeakPower VALUE <<" + vPeakPower);
-        peakPowerLabel.setText("Peak Power: " + String.format("%02d", vPeakPower) + " watts");
+        typeLabel.setText("Type: " + vType);
+        peakPowerLabel.setText("Peak Power: " + vPeakPower + "W");
     }
 
     private synchronized void setPower(boolean value) {
         if (vPower != value) {
             vPower = value;
-            // 2IMN15:  When the vPower has been updated, we should update the label from the GUI
+            // 2IMN15: Update the GUI when power changes
             System.out.println(">> POWER VALUE <<" + value);
 
-            powerLabel.setText("Power: " + value);
+            // Update lightbulb visual
+            lightbulbPanel.setOn(vPower);
+            if (vPower && vDimLevel == 0) {
+                // If turning on with 0 dim, set to 100
+                lightbulbPanel.setDimLevel(100);
+            }
+
+            // Update label with color coding
+            powerLabel.setText("Power: " + (value ? "ON" : "OFF"));
+            powerLabel.setForeground(value ? new Color(100, 255, 100) : new Color(255, 100, 100));
+
             fireResourceChange(RES_POWER);
         }
     }
@@ -162,8 +291,9 @@ public class Luminaire extends BaseInstanceEnabler {
     private synchronized void setPeakPower(long value) {
         if (vPeakPower != value) {
             vPeakPower = value;
-            // 2IMN15: When the peak power has been updated we should update the label in the UI
-            peakPowerLabel.setText("Peak Power: " + value  + " watts");
+            // 2IMN15: When the peak power has been updated we should update the label in
+            // the UI
+            peakPowerLabel.setText("Peak Power: " + value + " watts");
             fireResourceChange(RES_PEAK_POWER);
         }
     }
@@ -172,8 +302,9 @@ public class Luminaire extends BaseInstanceEnabler {
         if (vDimLevel != value) {
             vDimLevel = value;
             System.out.println(">> DIM VALUE <<" + value);
-            // 2IMN15:  When the dim value has been updated we should update the label in the UI
-            dimLabel.setText("Dim: " + value);
+            // 2IMN15: Update the lightbulb brightness
+            lightbulbPanel.setDimLevel((int) vDimLevel);
+            dimLabel.setText("Dim Level: " + value + "%");
             fireResourceChange(RES_DIM_LEVEL);
         }
     }

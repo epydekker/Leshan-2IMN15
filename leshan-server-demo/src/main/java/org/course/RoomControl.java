@@ -4,7 +4,6 @@
 
 package org.course;
 
-
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
@@ -27,7 +26,6 @@ import org.eclipse.leshan.core.node.LwM2mResource;
 import org.eclipse.leshan.core.node.LwM2mPath;
 import org.eclipse.leshan.core.observation.SingleObservation;
 
-
 public class RoomControl {
 
     //
@@ -36,11 +34,11 @@ public class RoomControl {
     private static LeshanServer lwServer;
     private static Map<String, Integer> peakPowerMap = new HashMap<>();
     private static int maximumPeakRoomPower = 0;
-    private static String roomName = "Living Room";  // arbitrary
-
+    private static int currentPowerBudget = -1; // Track the current allowed budget
+    private static String roomName = "Living Room"; // arbitrary
 
     //
-    // 2IMN15:  TODO  : fill in
+    // 2IMN15: TODO : fill in
     //
     // Declare variables to keep track of the state of the room.
     //
@@ -49,7 +47,7 @@ public class RoomControl {
         // Register the LWM2M server object for future use
         lwServer = server;
 
-        // 2IMN15:  TODO  : fill in
+        // 2IMN15: TODO : fill in
         //
         // Initialize the state variables.
 
@@ -65,8 +63,7 @@ public class RoomControl {
 
     public static void handleRegistration(Registration registration) {
         // Check which objects are available.
-        Map<Integer, org.eclipse.leshan.core.LwM2m.Version> supportedObject =
-                registration.getSupportedObject();
+        Map<Integer, org.eclipse.leshan.core.LwM2m.Version> supportedObject = registration.getSupportedObject();
 
         if (supportedObject.get(Constants.PRESENCE_DETECTOR_ID) != null) {
             System.out.println("Presence Detector:" + registration.getEndpoint());
@@ -97,34 +94,38 @@ public class RoomControl {
         }
 
         if (supportedObject.get(Constants.LUMINAIRE_ID) != null) {
-            System.out.println("Luminaire");
-            // 2IMN15:  Process the registration of a new Luminaire.
-            // 2IMN15:  The sequence diagram shows
-            // 			Luminaire -> Room control (Register ep=IoT-Pi42 Presence)
-            // 			Luminaire <- Room control (Created)
-            // 			Luminaire <- Room control (GET peak power Read)
-            // 			Luminaire -> Room control (2.05 Peak Power)
-            // 			Room control -> Room control (Add peak power to maximum room peak power)
-            // 			Room control -> Room control (Add <ep, [Peak Power]> to peak power map)
-            // The first two already happens; so we have to do the GET peak power Read;
-            // So we can make a read peak power request that we can send similarly to the observe in the previous part
-            ReadRequest readPeakPower = new ReadRequest(Constants.LUMINAIRE_ID, 0, Constants.RES_PEAK_POWER);
+            System.out.println("Luminaire detected: " + registration.getEndpoint());
+            // 2IMN15: Process the registration of a new Luminaire.
+            // 2IMN15: First read the luminaire TYPE to determine if we should control it
 
-            try {
-                ReadResponse resp = lwServer.send(registration, readPeakPower, 5000);
-                if (resp == null || !resp.isSuccess()) {
-                    System.out.println("Failed to read peak power for " + registration.getEndpoint());
-                } else {
-                    System.out.println("Read peak power for " + registration.getEndpoint());
-                    int peakPower = readInteger(registration, Constants.LUMINAIRE_ID,0, Constants.RES_PEAK_POWER);
-                    peakPowerMap.put(registration.getEndpoint(), peakPower);
-                    maximumPeakRoomPower += peakPower;
+            // Read the luminaire type first
+            String lumType = readString(registration, Constants.LUMINAIRE_ID, 0, Constants.RES_TYPE);
+            System.out.println("Luminaire type: " + lumType);
+
+            // Only control LED and Halogen luminaires, ignore Unknown or other types
+            if (lumType.equals("LED") || lumType.equals("Halogen")) {
+                // Read peak power and add to tracking map
+                ReadRequest readPeakPower = new ReadRequest(Constants.LUMINAIRE_ID, 0, Constants.RES_PEAK_POWER);
+
+                try {
+                    ReadResponse resp = lwServer.send(registration, readPeakPower, 5000);
+                    if (resp == null || !resp.isSuccess()) {
+                        System.out.println("Failed to read peak power for " + registration.getEndpoint());
+                    } else {
+                        int peakPower = readInteger(registration, Constants.LUMINAIRE_ID, 0, Constants.RES_PEAK_POWER);
+                        peakPowerMap.put(registration.getEndpoint(), peakPower);
+                        maximumPeakRoomPower += peakPower;
+                        System.out.println("Registered " + lumType + " luminaire: " + registration.getEndpoint() +
+                                " (Peak Power: " + peakPower + "W, Total Room Power: " + maximumPeakRoomPower + "W)");
+                    }
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
                 }
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
+            } else {
+                // Unknown or unsupported type - do NOT add to control map
+                System.out.println(">>> IGNORING luminaire '" + registration.getEndpoint() +
+                        "' with unsupported type: '" + lumType + "' - will NOT be controlled <<<");
             }
-
-
         }
 
         if (supportedObject.get(Constants.DEMAND_RESPONSE_ID) != null) {
@@ -136,7 +137,7 @@ public class RoomControl {
             int powerBudget = registerDemandResponse(registration);
         }
 
-        //  2IMN15: don't forget to update the other luminaires.
+        // 2IMN15: don't forget to update the other luminaires.
     }
 
 
@@ -154,13 +155,39 @@ public class RoomControl {
         if (peakPowerMap.containsKey(registration.getEndpoint())) {
             maximumPeakRoomPower -= peakPowerMap.get(registration.getEndpoint());
             peakPowerMap.remove(registration.getEndpoint());
+            System.out.println("Deregistered luminaire: " + registration.getEndpoint() +
+                    ". New Total Room Power: " + maximumPeakRoomPower + "W");
+
+            // Recalculate and update dimming for remaining luminaires
+            updateDimmingLevels();
         }
 
     }
 
+    private static void updateDimmingLevels() {
+        if (currentPowerBudget > 0 && maximumPeakRoomPower > 0) {
+            int dimLevel = Math.min(100, 100 * currentPowerBudget / maximumPeakRoomPower);
+            System.out.println("Updating dimming levels. Budget: " + currentPowerBudget + "W, MaxPower: "
+                    + maximumPeakRoomPower + "W -> Dim Level: " + dimLevel + "%");
+
+            for (String endpoint : peakPowerMap.keySet()) {
+                Registration lumReg = lwServer.getRegistrationService().getByEndpoint(endpoint);
+                if (lumReg != null) {
+                    WriteRequest setDim = new WriteRequest(Constants.LUMINAIRE_ID, 0, Constants.RES_DIM_LEVEL,
+                            dimLevel);
+                    try {
+                        lwServer.send(lumReg, setDim, 5000);
+                    } catch (InterruptedException e) {
+                        System.out.println("Failed to update dim level for " + endpoint);
+                    }
+                }
+            }
+        }
+    }
+
     public static void handleObserveResponse(SingleObservation observation,
-                                             Registration registration,
-                                             ObserveResponse response) {
+            Registration registration,
+            ObserveResponse response) {
         if (registration != null && observation != null && response != null) {
             LwM2mPath observationPath = observation.getPath();
 
@@ -192,39 +219,24 @@ public class RoomControl {
 
             }
 
-
             // For processing an update of the Demand Response object.
             // It contains some example code.
             int newPowerBudget = observedDemandResponse(observation, response);
             if (newPowerBudget != -1) {
+                currentPowerBudget = newPowerBudget; // Update stored budget
                 // 2IMN15: Once again let's look at the sequence diagram
-                // 			Demand Response -> Room control (Manually set total allowed peak room power)
-                // 			Room control <- Room control (New dim level = 100 * total allowed / maximum room peak )
-                // ALT: 	Room control <- Room control (New dim level = 100 if New dim level > 100 )
-                //       	Room control -> ep for ep in powerMap (POST Dim Level New dim level)
-                //       	Room control <- ep for ep in powerMap (204 changed)
-                int dimLevel = Math.min(100, 100 * newPowerBudget / maximumPeakRoomPower); // handles both the calculation and alt at the same time
-                for (String endpoint : peakPowerMap.keySet()) {
-                    Registration lumReg = lwServer.getRegistrationService().getByEndpoint(endpoint);
-                    if (lumReg != null) {
-                        // We need to send a request to set the RES_DIM_LEVEL to the same state as the new dim value
-                        WriteRequest setDim = new WriteRequest(Constants.LUMINAIRE_ID, 0, Constants.RES_DIM_LEVEL, dimLevel);
-                        try {
-                            WriteResponse wr = lwServer.send(lumReg, setDim, 5000);
-                            if (wr == null || !wr.isSuccess()) {
-                                System.out.println("Failed to write dim level for " + endpoint);
-                            }
-                        } catch (InterruptedException e) {
-                            throw new RuntimeException(e);
-                        }
-
-                    }
-                }
+                // Demand Response -> Room control (Manually set total allowed peak room power)
+                // Room control <- Room control (New dim level = 100 * total allowed / maximum
+                // room peak )
+                // ALT: Room control <- Room control (New dim level = 100 if New dim level > 100
+                // )
+                // Room control -> ep for ep in powerMap (POST Dim Level New dim level)
+                // Room control <- ep for ep in powerMap (204 changed)
+                updateDimmingLevels();
             }
-
         }
-    }
 
+    }
 
     // Support functions for reading and writing resources of
     // certain types.
@@ -240,8 +252,8 @@ public class RoomControl {
         try {
             ObserveRequest obRequest =
                     new ObserveRequest(Constants.DEMAND_RESPONSE_ID,
-                            0,
-                            Constants.RES_TOTAL_BUDGET);
+                    0,
+                    Constants.RES_TOTAL_BUDGET);
             System.out.println(">> ObserveRequest created << ");
             ObserveResponse coResponse =
                     lwServer.send(registration, obRequest, 1000);
@@ -252,13 +264,14 @@ public class RoomControl {
         } catch (Exception e) {
             System.out.println("Observe request failed for Demand Response.");
         }
+        currentPowerBudget = powerBudget; // Store initial budget
         return powerBudget;
     }
 
     // If the response contains a new power budget, it returns that value.
     // Otherwise, it returns -1.
     private static int observedDemandResponse(SingleObservation observation,
-                                              ObserveResponse response) {
+            ObserveResponse response) {
         // Alternative code:
         // String obsRes = observation.getPath().toString();
         // if (obsRes.equals("/33002/0/30005"))
@@ -276,7 +289,6 @@ public class RoomControl {
         }
         return -1;
     }
-
 
     private static int readInteger(Registration registration, int objectId, int instanceId, int resourceId) {
         try {
